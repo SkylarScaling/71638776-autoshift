@@ -1,0 +1,121 @@
+---
+# ==============================================================================
+# Phase 1: Provision the OpenShift Hub Cluster
+# ==============================================================================
+- import_playbook: ocp/provision-cluster.yaml
+
+# ==============================================================================
+# Phase 2: Install and Configure AutoShift (via OCI Registry)
+# ==============================================================================
+- name: Install AutoShift Stack (GitOps, ACM, and Policies)
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yaml
+
+  vars:
+    oci_registry: "quay.io/autoshift"
+    gitops_namespace: "openshift-gitops"
+    argo_project: "default"
+
+  environment:
+    KUBECONFIG: "{{ install_dir }}/{{ ocp_cluster.name }}/auth/kubeconfig"
+    PATH: "{{ bin_dir }}:{{ ansible_env.PATH }}"
+
+  tasks:
+    # --------------------------------------------------------------------------
+    # Step 1: OpenShift GitOps (From OCI)
+    # --------------------------------------------------------------------------
+    - name: Install OpenShift GitOps via Helm OCI
+      ansible.builtin.command: >
+        {{ bin_dir }}/helm upgrade --install openshift-gitops oci://{{ oci_registry }}/bootstrap/openshift-gitops 
+        --create-namespace
+      changed_when: true
+
+    - name: Wait for OpenShift GitOps Operator to be Ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: openshift-gitops-operator-controller-manager
+        namespace: openshift-gitops-operator
+      register: gitops_operator
+      until: >
+        gitops_operator.resources | length > 0 and
+        gitops_operator.resources[0].status.readyReplicas | default(0) > 0
+      retries: 30
+      delay: 10
+
+    # --------------------------------------------------------------------------
+    # Step 2: Advanced Cluster Management (From OCI)
+    # --------------------------------------------------------------------------
+    - name: Install Advanced Cluster Management via Helm OCI
+      ansible.builtin.command: >
+        {{ bin_dir }}/helm upgrade --install advanced-cluster-management oci://{{ oci_registry }}/bootstrap/advanced-cluster-management 
+        --create-namespace
+      changed_when: true
+
+    - name: Wait for ACM MultiClusterHub to be Running (Takes ~10 mins)
+      kubernetes.core.k8s_info:
+        api_version: operator.open-cluster-management.io/v1
+        kind: MultiClusterHub
+        name: multiclusterhub
+        namespace: open-cluster-management
+      register: mch_status
+      until: >
+        mch_status.resources | length > 0 and
+        mch_status.resources[0].status is defined and
+        mch_status.resources[0].status.phase | default('') == 'Running'
+      retries: 90
+      delay: 10
+
+    # --------------------------------------------------------------------------
+    # Step 3: Deploy AutoShift via ArgoCD (From OCI)
+    # --------------------------------------------------------------------------
+    - name: Deploy AutoShift ArgoCD Application
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: argoproj.io/v1alpha1
+          kind: Application
+          metadata:
+            name: autoshift
+            namespace: "{{ gitops_namespace }}"
+          spec:
+            project: "{{ argo_project }}"
+            source:
+              repoURL: "{{ oci_registry }}"
+              chart: autoshift
+              targetRevision: "*"
+              helm:
+                valueFiles:
+                  - values/global.yaml
+                  - values/clustersets/hub.yaml
+                  - values/clustersets/managed.yaml
+                values: |-
+                  autoshiftOciRegistry: true
+                  autoshiftOciRepo: oci://{{ oci_registry }}/policies
+            destination:
+              server: https://kubernetes.default.svc
+              namespace: "{{ gitops_namespace }}"
+            syncPolicy:
+              automated:
+                prune: true
+                selfHeal: true
+              syncOptions:
+                - CreateNamespace=true
+
+    # --------------------------------------------------------------------------
+    # Step 4: ClusterSet Labeling
+    # --------------------------------------------------------------------------
+    - name: Assign local-cluster to Hub ClusterSet
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: cluster.open-cluster-management.io/v1
+          kind: ManagedCluster
+          metadata:
+            name: local-cluster
+            labels:
+              cluster.open-cluster-management.io/clusterset: hub
+...

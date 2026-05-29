@@ -1,0 +1,10 @@
+---
+- name: Download appropriate python libraries
+  import_tasks: download-python-libraries.yaml
+
+- name: Download OCP binaries
+  import_tasks: download-ocp-binaries.yaml
+
+- name: Download Helm binaries
+  import_tasks: download-helm.yaml
+...

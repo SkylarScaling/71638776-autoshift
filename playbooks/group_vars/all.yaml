@@ -1,0 +1,6 @@
+---
+# Common Directories
+bin_dir: "~/.local/bin"
+working_dir: "{{ tmp_dir }}"
+install_dir: "{{ working_dir }}/autoshift/install"
+...
