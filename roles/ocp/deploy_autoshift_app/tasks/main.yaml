@@ -1,0 +1,37 @@
+---
+- name: Deploy AutoShift ArgoCD Application with Custom Templates
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: argoproj.io/v1alpha1
+      kind: Application
+      metadata:
+        name: autoshift
+        namespace: "{{ gitops_namespace }}"
+      spec:
+        project: "{{ argo_project }}"
+        source:
+          repoURL: "{{ oci_registry }}"
+          chart: autoshift
+          targetRevision: "*"
+          helm:
+            valueFiles:
+              - values/global.yaml
+            values: |
+              autoshiftOciRegistry: true
+              autoshiftOciRepo: oci://{{ oci_registry }}/policies
+              
+              # --- Hub Configuration ---
+              {{ lookup('template', 'hub-config.yaml.j2') }}
+              
+              # --- Managed Cluster Configuration ---
+              {{ lookup('template', 'managed-config.yaml.j2') }}
+        destination:
+          server: https://kubernetes.default.svc
+          namespace: "{{ gitops_namespace }}"
+        syncPolicy:
+          automated:
+            prune: true
+            selfHeal: true
+          syncOptions:
+            - CreateNamespace=true

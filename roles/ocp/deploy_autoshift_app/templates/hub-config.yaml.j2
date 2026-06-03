@@ -1,0 +1,48 @@
+# ==============================================================================
+# Hub Cluster Configuration Overrides
+# ==============================================================================
+hubClusterSets:
+  hub:
+    labels:
+      self-managed: 'true'
+      openshift-version: '4.20'
+
+      # --- Advanced Cluster Management ---
+      acm-subscription-name: advanced-cluster-management
+      acm-channel: release-2.16
+      acm-source: redhat-operators
+      acm-source-namespace: openshift-marketplace
+      acm-availability-config: 'High'
+      acm-observability: 'false'
+
+      # --- OpenShift GitOps ---
+      gitops: 'true'
+      gitops-subscription-name: openshift-gitops-operator
+      gitops-disable-default-argocd: 'true'
+      gitops-channel: gitops-1.20
+      gitops-source: redhat-operators
+      gitops-source-namespace: openshift-marketplace
+
+      # --- Compliance Operator ---
+      compliance: 'true'
+      compliance-auto-remediate: 'true'
+      compliance-subscription-name: compliance-operator
+      compliance-source: redhat-operators
+      compliance-source-namespace: openshift-marketplace
+      compliance-channel: stable
+
+      # --- Advanced Cluster Security (ACS) ---
+      acs: 'true'
+      acs-subscription-name: rhacs-operator
+      acs-egress-connectivity: Online
+      acs-channel: stable
+      acs-source: redhat-operators
+      acs-source-namespace: openshift-marketplace
+      acs-monitoring: 'true'
+
+      # --- Quay ---
+      quay: 'true'
+      quay-subscription-name: quay-operator
+      quay-channel: stable-3.17
+      quay-source: redhat-operators
+      quay-source-namespace: openshift-marketplace

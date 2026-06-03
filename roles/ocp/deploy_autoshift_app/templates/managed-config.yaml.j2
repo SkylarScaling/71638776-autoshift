@@ -1,0 +1,26 @@
+# ==============================================================================
+# Managed ClusterSets & Cluster Profiles
+# ==============================================================================
+managedClusterSets:
+  managed:
+    labels:
+      openshift-version: '4.20'
+      logging: 'true'
+      gitops-dev: 'false'
+
+      # --- Advanced Cluster Security (ACS) ---
+      acs: 'true'
+      acs-subscription-name: rhacs-operator
+      acs-egress-connectivity: Online
+      acs-channel: stable
+      acs-source: redhat-operators
+      acs-source-namespace: openshift-marketplace
+      acs-monitoring: 'true'
+
+      # --- Compliance Operator ---
+      compliance: 'true'
+      compliance-auto-remediate: 'true'
+      compliance-subscription-name: compliance-operator
+      compliance-source: redhat-operators
+      compliance-source-namespace: openshift-marketplace
+      compliance-channel: stable
