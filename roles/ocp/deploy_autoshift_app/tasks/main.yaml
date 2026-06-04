@@ -17,6 +17,7 @@
           helm:
             valueFiles:
               - values/global.yaml
+              - values/hub-minimal.yaml
             values: |
               autoshiftOciRegistry: true
               autoshiftOciRepo: oci://{{ oci_registry }}/policies

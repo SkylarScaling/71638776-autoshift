@@ -6,11 +6,8 @@
   hosts: hub_cluster
   connection: local
   gather_facts: false
-
-  vars:
-    oci_registry: "quay.io/autoshift"
-    gitops_namespace: "openshift-gitops"
-    argo_project: "default"
+  vars_files:
+    - group_vars/all.yaml
 
   tasks:
     # --------------------------------------------------------------------------
@@ -76,25 +73,44 @@
   hosts: hub_cluster
   connection: local
   gather_facts: false
+  vars_files:
+    - group_vars/all.yaml
 
   vars:
-    oci_registry: "quay.io/autoshift"
     gitops_namespace: "openshift-gitops"
-    argo_project: "default"
 
   environment:
-    # Use the Hub's credentials for applying the initial GitOps/ACM stack
     KUBECONFIG: "{{ install_dir }}/{{ ocp_cluster.name }}/auth/kubeconfig"
+    PATH: "{{ bin_dir }}:{{ ansible_env.PATH }}"
 
   tasks:
     # --------------------------------------------------------------------------
-    # Step 1: OpenShift GitOps (From OCI)
+    # Step 1: OpenShift GitOps (From Local Source)
     # --------------------------------------------------------------------------
-    - name: Install OpenShift GitOps via Helm OCI
-      ansible.builtin.command: >
-        {{ bin_dir }}/helm upgrade --install openshift-gitops oci://{{ oci_registry }}/bootstrap/openshift-gitops 
-        --create-namespace
-      changed_when: true
+    - name: Prepare GitOps namespace for Helm adoption
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ gitops_namespace }}"
+            annotations:
+              meta.helm.sh/release-name: openshift-gitops
+              meta.helm.sh/release-namespace: "{{ gitops_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: Helm
+
+    - name: Install OpenShift GitOps via Helm Module
+      kubernetes.core.helm:
+        name: openshift-gitops
+        chart_ref: "{{ autoshift_local_path }}/openshift-gitops"
+        values_files:
+          - "{{ autoshift_local_path }}/policies/stable/openshift-gitops/values.yaml"
+        release_namespace: "{{ gitops_namespace }}"
+        create_namespace: true
+        state: present
+        binary_path: "{{ bin_dir }}/helm"
 
     - name: Wait for OpenShift GitOps Operator to be Ready
       kubernetes.core.k8s_info:
@@ -105,18 +121,50 @@
       register: gitops_operator
       until: >
         gitops_operator.resources | length > 0 and
-        gitops_operator.resources[0].status.readyReplicas | default(0) > 0
+        gitops_operator.resources.status.readyReplicas | default(0) > 0
       retries: 30
       delay: 10
 
+    - name: Wait for ArgoCD Server to be Ready
+      kubernetes.core.k8s_info:
+        api_version: apps/v1
+        kind: Deployment
+        name: openshift-gitops-server
+        namespace: openshift-gitops
+      register: argocd_server
+      until: >
+        argocd_server.resources | length > 0 and
+        argocd_server.resources.status.readyReplicas | default(0) > 0
+      retries: 60
+      delay: 10
+
     # --------------------------------------------------------------------------
-    # Step 2: Advanced Cluster Management (From OCI)
+    # Step 2: Advanced Cluster Management (From Local Source)
     # --------------------------------------------------------------------------
-    - name: Install Advanced Cluster Management via Helm OCI
-      ansible.builtin.command: >
-        {{ bin_dir }}/helm upgrade --install advanced-cluster-management oci://{{ oci_registry }}/bootstrap/advanced-cluster-management 
-        --create-namespace
-      changed_when: true
+    - name: Prepare ACM namespace for Helm adoption
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "open-cluster-management"
+            annotations:
+              meta.helm.sh/release-name: advanced-cluster-management
+              meta.helm.sh/release-namespace: "open-cluster-management"
+            labels:
+              app.kubernetes.io/managed-by: Helm
+
+    - name: Install Advanced Cluster Management via Helm Module
+      kubernetes.core.helm:
+        name: advanced-cluster-management
+        chart_ref: "{{ autoshift_local_path }}/advanced-cluster-management"
+        values_files:
+          - "{{ autoshift_local_path }}/policies/stable/advanced-cluster-management/values.yaml"
+        release_namespace: "open-cluster-management"
+        create_namespace: true
+        state: present
+        binary_path: "{{ bin_dir }}/helm"
 
     - name: Wait for ACM MultiClusterHub to be Running (Takes ~10 mins)
       kubernetes.core.k8s_info:
@@ -127,17 +175,80 @@
       register: mch_status
       until: >
         mch_status.resources | length > 0 and
-        mch_status.resources[0].status is defined and
-        mch_status.resources[0].status.phase | default('') == 'Running'
+        mch_status.resources.status is defined and
+        mch_status.resources.status.phase | default('') == 'Running'
       retries: 90
       delay: 10
 
     # --------------------------------------------------------------------------
-    # Step 3: Deploy AutoShift via ArgoCD (From OCI)
+    # Step 3: Deploy AutoShift AppSet (From Local Source)
     # --------------------------------------------------------------------------
-    - name: Configure and Deploy AutoShift ArgoCD Application
-      ansible.builtin.include_role:
-        name: ocp/deploy_autoshift_app
+    - name: Deploy AutoShift via Helm Module
+      kubernetes.core.helm:
+        name: autoshift
+        chart_ref: "{{ autoshift_local_path }}/autoshift"
+        release_namespace: "{{ gitops_namespace }}"
+        state: present
+        binary_path: "{{ bin_dir }}/helm"
+        values_files:
+          - values/global.yaml
+          - values/clustersets/hub-minimal.yaml
+        values:
+          # Change this to your fork URL if you have pushed custom policy modifications
+          autoshiftGitRepo: "https://github.com/auto-shift/autoshiftv2.git"
+          autoshiftGitBranchTag: "main"
+
+          # Globally exclude unneeded base policies
+          excludePolicies:
+            - infra-nodes
+            - worker-nodes
+
+          hubClusterSets:
+            hub:
+              labels:
+                # Core Minimal Labels
+                openshift-version: '4.20.18'
+                self-managed: 'true'
+
+                # Required AutoShift Component: GitOps
+                gitops: 'true'
+                gitops-subscription-name: openshift-gitops-operator
+                gitops-channel: gitops-1.20
+                gitops-source: redhat-operators
+                gitops-source-namespace: openshift-marketplace
+                gitops-disable-default-argocd: 'true'
+
+                # Added Operator: Quay
+                quay: 'true'
+                quay-subscription-name: quay-operator
+                quay-channel: stable-3.17
+                quay-source: redhat-operators
+                quay-source-namespace: openshift-marketplace
+
+          managedClusterSets:
+            managed:
+              labels:
+                openshift-version: '4.20.18'
+                logging: 'true'
+                gitops-dev: 'false'
+
+                # --- Advanced Cluster Security (ACS) ---
+                acs: 'true'
+                acs-subscription-name: rhacs-operator
+                acs-egress-connectivity: Online
+                acs-channel: stable
+                acs-source: redhat-operators
+                acs-source-namespace: openshift-marketplace
+                acs-monitoring: 'true'
+
+                # --- Compliance Operator ---
+                compliance: 'true'
+                compliance-auto-remediate: 'true'
+                compliance-subscription-name: compliance-operator
+                compliance-source: redhat-operators
+                compliance-source-namespace: openshift-marketplace
+                compliance-channel: stable
+
 
     # --------------------------------------------------------------------------
     # Step 4: ClusterSet Labeling
