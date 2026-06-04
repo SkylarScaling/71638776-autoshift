@@ -2,13 +2,75 @@
 # ==============================================================================
 # Phase 1: Provision the OpenShift Hub Cluster
 # ==============================================================================
-- import_playbook: ocp/provision-cluster.yaml
+- name: Provision OCP Cluster for ACM Hub
+  hosts: hub_cluster
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yaml
+
+  tasks:
+    # --------------------------------------------------------------------------
+    # Step 1: Provision Hub Cluster
+    # --------------------------------------------------------------------------
+    - name: Ensure prerequisites are met
+      ansible.builtin.include_role:
+        name: ocp/install_ocp_prerequisites
+
+    - name: Request Elastic IP Quota Increase
+      ansible.builtin.include_role:
+        name: aws/aws_eip_quota
+
+    - name: Provision Global Hub via IPI
+      ansible.builtin.include_role:
+        name: ocp/aws_provision_ocp_ipi
+
+    # Since IPI provisions the cluster directly, its kubeconfig is generated locally.
+    - name: Set ACM Hub Kubeconfig Path
+      ansible.builtin.set_fact:
+        hub_kubeconfig: "{{ install_dir }}/{{ ocp_cluster.name }}/auth/kubeconfig"
+
+    - name: Create Infrastructure Node Pool
+      block:
+        - ansible.builtin.include_role:
+            name: ocp/aws_create_machineset
+          vars:
+            target_kubeconfig: "{{ hub_kubeconfig }}"
+            pool_name: "infra"
+            pool_replicas: "{{ install_config.infra.replicas }}"
+            pool_instance_type: "{{ install_config.infra.instance_type }}"
+            pool_labels:
+              node-role.kubernetes.io/infra: ""
+            pool_taints:
+              - effect: NoSchedule
+                key: node-role.kubernetes.io/infra
+      when: install_config.infra is defined
+
+    - name: Create ODF Storage Node Pool
+      block:
+        - ansible.builtin.include_role:
+            name: ocp/aws_create_machineset
+          vars:
+            target_kubeconfig: "{{ hub_kubeconfig }}"
+            pool_name: "storage"
+            pool_replicas: "{{ install_config.storage.replicas }}"
+            pool_instance_type: "{{ install_config.storage.instance_type }}"
+            pool_labels:
+              cluster.ocs.openshift.io/openshift-storage: ""
+              # Workers label required so standard OVN/Networking pods schedule here
+              node-role.kubernetes.io/worker: ""
+              node-role.kubernetes.io/storage: ""
+            pool_taints:
+              - effect: NoSchedule
+                key: node.ocs.openshift.io/storage
+                value: "true"
+      when: install_config.storage is defined
 
 # ==============================================================================
 # Phase 2: Install and Configure AutoShift (via OCI Registry)
 # ==============================================================================
 - name: Install AutoShift Stack (GitOps, ACM, and Policies)
-  hosts: localhost
+  hosts: hub_cluster
   connection: local
   gather_facts: false
   vars_files:
@@ -90,8 +152,7 @@
               helm:
                 valueFiles:
                   - values/global.yaml
-                  - values/clustersets/hub.yaml
-                  - values/clustersets/managed.yaml
+                  - values/clustersets/hub-minimal.yaml
                 values: |-
                   autoshiftOciRegistry: true
                   autoshiftOciRepo: oci://{{ oci_registry }}/policies
