@@ -89,11 +89,21 @@
     # --------------------------------------------------------------------------
     # Step 1: OpenShift GitOps (From OCI)
     # --------------------------------------------------------------------------
+    - name: Check if OpenShift GitOps Helm release exists
+      ansible.builtin.command: >
+        {{ bin_dir }}/helm list -n openshift-gitops-operator -o json
+      register: gitops_helm_list
+      changed_when: false
+      failed_when: false
+
     - name: Install OpenShift GitOps via Helm OCI
       ansible.builtin.command: >
-        {{ bin_dir }}/helm upgrade --install openshift-gitops oci://{{ oci_registry }}/bootstrap/openshift-gitops 
+        {{ bin_dir }}/helm upgrade --install openshift-gitops
+        oci://{{ oci_registry }}/bootstrap/openshift-gitops
+        --namespace openshift-gitops-operator
         --create-namespace
-      changed_when: true
+      register: gitops_helm_result
+      changed_when: "'has been upgraded' in gitops_helm_result.stdout or 'has been installed' in gitops_helm_result.stdout"
 
     - name: Wait for OpenShift GitOps Operator to be Ready
       kubernetes.core.k8s_info:
@@ -111,11 +121,26 @@
     # --------------------------------------------------------------------------
     # Step 2: Advanced Cluster Management (From OCI)
     # --------------------------------------------------------------------------
+    - name: Check if Advanced Cluster Management Helm release exists
+      ansible.builtin.command: >
+        {{ bin_dir }}/helm list -n open-cluster-management -o json
+      register: acm_helm_list
+      changed_when: false
+      failed_when: false
+
     - name: Install Advanced Cluster Management via Helm OCI
       ansible.builtin.command: >
-        {{ bin_dir }}/helm upgrade --install advanced-cluster-management oci://{{ oci_registry }}/bootstrap/advanced-cluster-management 
+        {{ bin_dir }}/helm upgrade --install advanced-cluster-management
+        oci://{{ oci_registry }}/bootstrap/advanced-cluster-management
+        --namespace open-cluster-management
         --create-namespace
-      changed_when: true
+        --wait
+        --timeout 15m
+      register: acm_helm_result
+      changed_when: "'has been upgraded' in acm_helm_result.stdout or 'has been installed' in acm_helm_result.stdout"
+      retries: 3
+      delay: 30
+      until: acm_helm_result.rc == 0
 
     - name: Wait for ACM MultiClusterHub to be Running (Takes ~10 mins)
       kubernetes.core.k8s_info:
@@ -156,6 +181,26 @@
                 values: |-
                   autoshiftOciRegistry: true
                   autoshiftOciRepo: oci://{{ oci_registry }}/policies
+                  # Override the hub-minimal clusterset labels to enable ACS and Quay
+                  hubClusterSets:
+                    hub:
+                      labels:
+                        # ------------------------------------------------------
+                        # Advanced Cluster Security (ACS)
+                        # ------------------------------------------------------
+                        acs: 'true'
+                        acs-subscription-name: rhacs-operator
+                        acs-channel: rhacs-4.10
+                        acs-source: redhat-operators
+                        acs-source-namespace: openshift-marketplace
+                        # ------------------------------------------------------
+                        # Quay
+                        # ------------------------------------------------------
+                        quay: 'true'
+                        quay-subscription-name: quay-operator
+                        quay-channel: stable-3.17
+                        quay-source: redhat-operators
+                        quay-source-namespace: openshift-marketplace
             destination:
               server: https://kubernetes.default.svc
               namespace: "{{ gitops_namespace }}"
@@ -179,4 +224,30 @@
             name: local-cluster
             labels:
               cluster.open-cluster-management.io/clusterset: hub
+
+# ==============================================================================
+# SUMMARY: Final Environment Handoff
+# ==============================================================================
+- name: Deployment Summary
+  hosts: hub_cluster
+  connection: local
+  gather_facts: false
+  tags: ['summary']
+  tasks:
+    - name: Fetch Global Hub kubeadmin password
+      ansible.builtin.slurp:
+        src: "{{ install_dir }}/{{ ocp_cluster.name }}/auth/kubeadmin-password"
+      register: global_hub_password_raw
+
+    - name: Print Final Environment Details
+      ansible.builtin.debug:
+        msg:
+          - "=================================================================="
+          - "🎉 FULL ENVIRONMENT PROVISIONING COMPLETE! 🎉"
+          - "=================================================================="
+          - "Global Hub Cluster: {{ ocp_cluster.name }}"
+          - "Web Console:        https://console-openshift-console.apps.{{ ocp_cluster.name }}.{{ base_domain }}/"
+          - "Username:           kubeadmin"
+          - "Password:           {{ global_hub_password_raw.content | b64decode }}"
+          - "=================================================================="
 ...
