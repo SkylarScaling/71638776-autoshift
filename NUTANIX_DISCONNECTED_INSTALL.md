@@ -15,9 +15,12 @@ This guide is based on official Red Hat OpenShift documentation:
 ## Prerequisites
 
 **Jumphost Requirements:**
-- RHEL 8/9 or Fedora system with internet access initially (for mirroring)
+- **Red Hat Enterprise Linux 9.x** with internet access initially (for mirroring)
+  - RHEL 8 is also supported but RHEL 9 is recommended for OpenShift 4.20
 - Minimum 500GB disk space for container registry mirror
 - Access to both internet-connected and air-gapped networks (or ability to transfer data)
+- **Podman 4.0 or later** (included in RHEL 9)
+- **OpenSSL** (included in RHEL 9)
 
 **Nutanix Environment:**
 - Nutanix AHV cluster with Prism Central
@@ -32,11 +35,51 @@ This guide is based on official Red Hat OpenShift documentation:
 
 ## Step 1: Prepare Jumphost (Internet-Connected Phase)
 
-### 1.1 Install Required Tools
+### 1.0 Verify RHEL 9 System
+
+**IMPORTANT**: All commands in this guide are written for **Red Hat Enterprise Linux 9.x**. 
 
 ```bash
-# Install dependencies
-sudo dnf install -y podman httpd-tools jq skopeo
+# Verify RHEL version (should show 9.x)
+cat /etc/redhat-release
+
+# Should output something like: "Red Hat Enterprise Linux release 9.4 (Plow)"
+# Minimum RHEL 9.0 required, RHEL 9.2+ recommended for OpenShift 4.20
+
+# Verify system architecture
+uname -m
+# Should output: x86_64
+
+# Check available disk space (need 500GB+ free)
+df -h /opt /tmp ~
+```
+
+### 1.1 Install Required Tools
+
+**Note**: This guide uses `dnf` (default package manager in RHEL 9), not `yum`.
+
+```bash
+# Ensure system is registered with Red Hat Subscription Manager
+sudo subscription-manager register
+sudo subscription-manager attach --auto
+
+# Enable required repositories (usually enabled by default in RHEL 9)
+sudo subscription-manager repos --enable=rhel-9-for-x86_64-baseos-rpms
+sudo subscription-manager repos --enable=rhel-9-for-x86_64-appstream-rpms
+
+# Update system to latest packages
+sudo dnf update -y
+
+# Install dependencies (all available in RHEL 9 default repos)
+# Note: RHEL 9 uses Podman 4.x by default (Docker is not included)
+sudo dnf install -y podman httpd-tools jq skopeo openssl tar gzip wget
+
+# Verify podman version (RHEL 9 includes Podman 4.0+)
+podman --version
+# Should show version 4.0 or higher
+
+# Start and enable podman socket (optional, for systemd integration)
+systemctl --user enable --now podman.socket
 
 # Download OpenShift installer and CLI
 export VERSION=4.20.18
@@ -53,9 +96,10 @@ tar -xzf openshift-client-linux.tar.gz
 sudo mv oc kubectl openshift-install /usr/local/bin/
 sudo chmod +x /usr/local/bin/{oc,kubectl,openshift-install}
 
-# Verify
+# Verify installations
 oc version
 openshift-install version
+podman version
 ```
 
 ### 1.2 Download and Install Mirror Registry
@@ -95,9 +139,17 @@ podman login -u init -p passw0rd --tls-verify=false $(hostname):8443
 # OR test with curl
 curl -k -u init:passw0rd https://$(hostname):8443/v2/_catalog
 
-# Configure firewall
+# Configure firewall (firewalld is default in RHEL 9)
 sudo firewall-cmd --add-port=8443/tcp --permanent
 sudo firewall-cmd --reload
+
+# Verify firewall rule
+sudo firewall-cmd --list-ports
+
+# Note: SELinux is enabled by default in RHEL 9
+# The mirror-registry tool handles SELinux contexts automatically
+# Verify SELinux is not blocking (should see "Enforcing")
+getenforce
 ```
 
 #### Mirror Registry Installation Options
@@ -291,11 +343,20 @@ cp ${LOCAL_SECRET_JSON} /tmp/ocp-binaries/
 
 ## Step 4: Set Up Disconnected Jumphost
 
+**IMPORTANT**: The disconnected jumphost must also be running **RHEL 9.x** with the same prerequisites as the internet-connected jumphost.
+
 ### 4.1 Restore Registry
 
 **For mirror-registry tool installation:**
 
 ```bash
+# On the disconnected RHEL 9 jumphost
+# Ensure required packages are installed
+sudo dnf install -y podman openssl tar gzip
+
+# Verify podman version (4.0+ required)
+podman --version
+
 # Install binaries
 cd ~
 tar -xzf ocp-binaries/mirror-registry.tar.gz
@@ -364,24 +425,45 @@ sudo podman run -d --name mirror-registry \
 
 ### 4.2 Configure Firewall
 
+**Note**: RHEL 9 uses firewalld by default. Ensure the firewalld service is running.
+
 **For mirror-registry (port 8443):**
 ```bash
+# Ensure firewalld is running (default in RHEL 9)
+sudo systemctl enable --now firewalld
+sudo systemctl status firewalld
+
+# Add port 8443
 sudo firewall-cmd --add-port=8443/tcp --permanent
 sudo firewall-cmd --reload
+
+# Verify
+sudo firewall-cmd --list-ports
 ```
 
 **For manual registry (port 5000):**
 ```bash
 sudo firewall-cmd --add-port=5000/tcp --permanent
 sudo firewall-cmd --reload
+sudo firewall-cmd --list-ports
 ```
 
 ## Step 5: Create Install Configuration
 
 ### 5.1 Generate SSH Key (if needed)
 
+**Note**: RHEL 9 includes OpenSSH 8.7+ which fully supports ed25519 keys (recommended for OpenShift).
+
 ```bash
-ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519
+# Generate ed25519 SSH key (recommended for OpenShift 4.20)
+ssh-keygen -t ed25519 -N '' -f ~/.ssh/id_ed25519 -C "ocp-cluster-key"
+
+# Verify key was created
+ls -la ~/.ssh/id_ed25519*
+
+# Set proper permissions (important for RHEL 9 security)
+chmod 600 ~/.ssh/id_ed25519
+chmod 644 ~/.ssh/id_ed25519.pub
 ```
 
 ### 5.2 Create install-config.yaml
@@ -663,8 +745,68 @@ After successful installation:
 5. **Configure networking**: Set up egress IPs, network policies as needed
 6. **Backup etcd**: Set up regular etcd backup jobs
 
+## RHEL 9 Specific Considerations
+
+### Package Management
+- RHEL 9 uses **dnf** as the default package manager (not yum)
+- Most packages are available in `baseos` and `appstream` repositories
+- Podman 4.x is included by default (no Docker in RHEL 9)
+
+### Container Runtime
+- **Podman 4.0+** is the default container runtime
+- Rootless containers are fully supported and recommended
+- cgroups v2 is the default (vs cgroups v1 in RHEL 8)
+
+### Security
+- **SELinux** is enforcing by default - mirror-registry tool handles SELinux contexts automatically
+- **firewalld** is the default firewall (enabled by default)
+- FIPS mode can be enabled if required for compliance
+
+### Networking
+- NetworkManager is the default network management tool
+- systemd-resolved is used for DNS resolution
+
+### System Management
+- **systemd** version 250+ (newer than RHEL 8)
+- **OpenSSL 3.0** (vs OpenSSL 1.1.1 in RHEL 8)
+- Python 3.9+ is the default Python version
+
+### Known Compatibility
+- OpenShift 4.20 is fully tested and supported on RHEL 9
+- Mirror registry tool requires RHEL 9.0 or later
+- Podman version must be 4.0 or higher (included in RHEL 9)
+
+### Troubleshooting RHEL 9 Specific Issues
+
+**Podman socket issues:**
+```bash
+# Enable user podman socket
+systemctl --user enable --now podman.socket
+systemctl --user status podman.socket
+```
+
+**SELinux denials:**
+```bash
+# Check for SELinux denials
+sudo ausearch -m AVC -ts recent
+
+# If needed, temporarily set to permissive for troubleshooting (not recommended for production)
+sudo setenforce 0
+# Re-enable after testing
+sudo setenforce 1
+```
+
+**Firewalld not running:**
+```bash
+# Start and enable firewalld
+sudo systemctl enable --now firewalld
+sudo systemctl status firewalld
+```
+
 ## Additional Resources
 
 - [OpenShift 4.20 Documentation](https://docs.openshift.com/container-platform/4.20/)
+- [RHEL 9 Documentation](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9)
 - [Nutanix Platform Integration](https://docs.openshift.com/container-platform/4.20/installing/installing_nutanix/preparing-to-install-on-nutanix.html)
 - [Disconnected Installation Guide](https://docs.openshift.com/container-platform/4.20/installing/disconnected_install/index.html)
+- [Podman on RHEL 9](https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/9/html/building_running_and_managing_containers/index)
