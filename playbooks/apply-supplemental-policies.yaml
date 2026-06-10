@@ -1,0 +1,81 @@
+---
+# ==============================================================================
+# Apply Supplemental ACM Policies
+# ==============================================================================
+# This playbook applies supplemental ACM policies that extend autoshift
+# functionality. Useful for:
+# - Applying to existing clusters after initial deployment
+# - Re-applying after policy modifications
+# - Standalone policy management
+#
+# Usage:
+#   ansible-playbook playbooks/apply-supplemental-policies.yaml -i <inventory>
+# ==============================================================================
+- name: Apply Supplemental ACM Policies
+  hosts: hub_cluster
+  connection: local
+  gather_facts: false
+  vars_files:
+    - group_vars/all.yaml
+
+  environment:
+    KUBECONFIG: "{{ install_dir }}/{{ ocp_cluster.name }}/auth/kubeconfig"
+    PATH: "{{ bin_dir }}:{{ ansible_env.PATH }}"
+
+  tasks:
+    - name: Verify connection to hub cluster
+      kubernetes.core.k8s_cluster_info:
+      register: cluster_info
+
+    - name: Display cluster info
+      ansible.builtin.debug:
+        msg: "Connected to cluster: {{ cluster_info.version.server.kubernetes.gitVersion }}"
+
+    - name: Check if policies-autoshift namespace exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: policies-autoshift
+      register: policy_namespace
+
+    - name: Fail if policies-autoshift namespace doesn't exist
+      ansible.builtin.fail:
+        msg: |
+          The policies-autoshift namespace does not exist.
+          This suggests autoshift has not been deployed yet.
+          Please run deploy-autoshift-stack.yaml first.
+      when: policy_namespace.resources | length == 0
+
+    - name: Apply ACS Infrastructure Nodes Policy
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../policies/policy-acs-infra-nodes.yaml"
+      register: acs_policy
+
+    - name: Wait for ACS infra nodes policy to be created
+      kubernetes.core.k8s_info:
+        api_version: policy.open-cluster-management.io/v1
+        kind: Policy
+        name: policy-acs-infra-nodes
+        namespace: policies-autoshift
+      register: policy_status
+      until: policy_status.resources | length > 0
+      retries: 5
+      delay: 2
+
+    - name: Display policy status
+      ansible.builtin.debug:
+        msg:
+          - "=================================================================="
+          - "Supplemental Policies Applied"
+          - "=================================================================="
+          - "Policy: policy-acs-infra-nodes"
+          - "Namespace: policies-autoshift"
+          - "Status: {{ acs_policy.changed | ternary('Created/Updated', 'Already exists') }}"
+          - ""
+          - "To check policy compliance:"
+          - "  oc get policy -n policies-autoshift policy-acs-infra-nodes"
+          - ""
+          - "To check ACS Central configuration:"
+          - "  oc get central -n stackrox stackrox-central-services -o yaml"
+          - "=================================================================="

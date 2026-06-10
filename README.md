@@ -8,7 +8,9 @@ a hub-and-spoke centralized management architecture for distributed workload env
 *   `playbooks/aws/`: Playbooks for managing AWS infrastructure limits (e.g., Elastic IP Quotas).
 *   `playbooks/ocp/`: Playbooks for provisioning the OpenShift cluster via IPI, installing CLI prerequisites, and defining custom MachineSets.
 *   `playbooks/deploy-autoshift-stack.yaml`: The primary playbook that provisions the OCP cluster and layers on the OpenShift GitOps and ACM components via OCI registries.
+*   `playbooks/apply-supplemental-policies.yaml`: Applies supplemental ACM policies that extend autoshift functionality (useful for existing clusters).
 *   `playbooks/group_vars/`: Directory for variable definition files driving the deployment.
+*   `policies/`: Supplemental ACM policies that customize autoshift deployments beyond upstream capabilities.
 
 ## Prerequisites
 
@@ -80,5 +82,24 @@ all:
 ### Deploy the Hub Cluster and AutoShift Stack
 To provision the baseline OCP cluster and install OpenShift GitOps and Advanced Cluster Management, run the primary deployment playbook:
 ```bash
-ansible-playbook deploy-autoshift-stack.yaml -i <path_to_inventory>
+ansible-playbook playbooks/deploy-autoshift-stack.yaml -i <path_to_inventory>
 ```
+
+**Note:** This playbook is **fully idempotent** and can be safely re-run multiple times. See [playbooks/IDEMPOTENCY.md](playbooks/IDEMPOTENCY.md) for details.
+
+This playbook will:
+1. Provision an OCP cluster on AWS using IPI
+2. Create custom MachineSets for infrastructure and storage nodes
+3. Install OpenShift GitOps via Helm from OCI registry
+4. Install Advanced Cluster Management via Helm from OCI registry
+5. Deploy the AutoShift ArgoCD Application pointing to autoshift policies
+6. Apply supplemental policies (e.g., configure ACS to use infrastructure nodes)
+
+### Apply Supplemental Policies to Existing Cluster
+If you need to apply or update supplemental policies on an already-deployed cluster:
+```bash
+ansible-playbook playbooks/apply-supplemental-policies.yaml -i <path_to_inventory>
+```
+
+Supplemental policies include:
+- **ACS Infrastructure Nodes**: Configures Advanced Cluster Security Central to run on infrastructure nodes instead of worker nodes
