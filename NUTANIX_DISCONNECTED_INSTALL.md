@@ -65,6 +65,10 @@ openshift-install version
 cd ~
 wget https://developers.redhat.com/content-gateway/rest/mirror/pub/openshift-v4/clients/mirror-registry/latest/mirror-registry.tar.gz
 
+# Alternative download locations (if above fails):
+# wget https://mirror.openshift.com/pub/openshift-v4/clients/mirror-registry/latest/mirror-registry.tar.gz
+# OR from GitHub releases: https://github.com/quay/mirror-registry/releases
+
 # Extract the tool
 tar -xzf mirror-registry.tar.gz
 
