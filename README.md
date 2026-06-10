@@ -1,8 +1,14 @@
 # OpenShift & AutoShift Deployment Automation
 
 This repository contains the Ansible playbooks and configurations required to provision the Red Hat OpenShift Container 
-Platform (OCP) on AWS and deploy the AutoShift stack (GitOps and Advanced Cluster Management). This automation supports 
+Platform (OCP) on AWS and Nutanix, and deploy the AutoShift stack (GitOps and Advanced Cluster Management). This automation supports 
 a hub-and-spoke centralized management architecture for distributed workload environments.
+
+## Documentation
+
+- **[Deployment Guide Overview](DEPLOYMENT_GUIDE_OVERVIEW.md)**: Architecture patterns and use cases
+- **[Nutanix Disconnected Install Guide](NUTANIX_DISCONNECTED_INSTALL.md)**: Complete guide for air-gapped deployments on Nutanix AHV
+- **[Playbook Idempotency Guide](playbooks/IDEMPOTENCY.md)**: Details on safe re-execution of automation
 
 ## Repository Structure
 *   `playbooks/aws/`: Playbooks for managing AWS infrastructure limits (e.g., Elastic IP Quotas).
