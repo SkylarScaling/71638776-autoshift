@@ -1,0 +1,105 @@
+---
+# ==============================================================================
+# Supplemental ACM Policy: Deploy ACS SecuredCluster
+# ==============================================================================
+# This policy creates the SecuredCluster CR to deploy sensor, collector, and
+# admission-control on the local cluster.
+#
+# WHY THIS IS NEEDED:
+# AutoShift's policy-acs-secured-cluster-hub depends on policy-acs-init-bundle
+# being Compliant. However, our init-bundle job policy (with infra tolerations)
+# conflicts with AutoShift's, causing it to show NonCompliant. This breaks the
+# dependency chain and prevents the SecuredCluster from being created.
+#
+# Since we MUST have our init-bundle policy (no workers = job needs infra
+# tolerations), we bypass AutoShift's dependency by creating the SecuredCluster
+# directly after the init bundle completes.
+# ==============================================================================
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: policy-acs-secured-cluster
+  namespace: policies-autoshift
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+    policy.open-cluster-management.io/categories: CM Configuration Management
+    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
+spec:
+  disabled: false
+  remediationAction: enforce
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: acs-secured-cluster-create
+        spec:
+          remediationAction: enforce
+          severity: high
+          evaluationInterval:
+            compliant: 10m
+            noncompliant: 30s
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: platform.stackrox.io/v1alpha1
+                kind: SecuredCluster
+                metadata:
+                  name: stackrox-secured-cluster-services
+                  namespace: stackrox
+                spec:
+                  admissionControl:
+                    listenOnCreates: false
+                    listenOnEvents: true
+                    listenOnUpdates: false
+                  auditLogs:
+                    collection: Auto
+                  centralEndpoint: '{{ fromSecret "stackrox" "sensor-tls" "acs-host" | base64dec }}'
+                  clusterName: '{{ fromSecret "open-cluster-management-agent" "hub-kubeconfig-secret" "cluster-name" | base64dec }}'
+                  perNode:
+                    collector:
+                      collection: EBPF
+                      imageFlavor: Regular
+                    taintToleration: TolerateTaints
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: policy-acs-secured-cluster-placement
+  namespace: policies-autoshift
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  clusterSets:
+    - hub
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: 'autoshift.io/acs'
+              operator: In
+              values:
+                - 'true'
+  tolerations:
+    - key: cluster.open-cluster-management.io/unreachable
+      operator: Exists
+    - key: cluster.open-cluster-management.io/unavailable
+      operator: Exists
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: policy-acs-secured-cluster-placement
+  namespace: policies-autoshift
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+placementRef:
+  name: policy-acs-secured-cluster-placement
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: policy-acs-secured-cluster
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy

@@ -109,3 +109,40 @@ ansible-playbook playbooks/apply-supplemental-policies.yaml -i <path_to_inventor
 
 Supplemental policies include:
 - **ACS Infrastructure Nodes**: Configures Advanced Cluster Security Central to run on infrastructure nodes instead of worker nodes
+
+## AutoShift Bug Fixes (IMPORTANT)
+
+This automation includes **critical bug fixes** for AutoShift v2's infrastructure node provisioning. See [AUTOSHIFT_BUGS_AND_LIMITATIONS.md](AUTOSHIFT_BUGS_AND_LIMITATIONS.md) for complete documentation.
+
+### What's Fixed Automatically
+
+The automation **disables AutoShift's broken `policy-infra-nodes-aws`** and applies a working replacement policy:
+
+**File:** `policies/policy-infra-nodes-machineset-create.yaml`
+
+This policy correctly:
+- ✅ Reads `infra-nodes-instance-type` and `infra-nodes-volume-size` cluster labels
+- ✅ Uses correct AWS resource naming (`{infra-id}-node` security group, `{infra-id}-subnet-private-{zone}` subnet)
+- ✅ Creates MachineSets with proper instance type and volume size
+- ✅ Prevents disk pressure issues on infra nodes
+
+**No manual intervention required** - the fix is applied automatically during deployment.
+
+### Fresh Deployment Expectations
+
+On a fresh build, you will see:
+
+1. **Infra nodes provision correctly:**
+   - Instance type: As specified in `infra-nodes-instance-type` label (e.g., m6a.4xlarge)
+   - Volume size: As specified in `infra-nodes-volume-size` label (e.g., 120 GB)
+   - No disk pressure
+
+2. **One policy shows NonCompliant (expected):**
+   - `policy-infra-nodes-aws`: NonCompliant (disabled due to bugs)
+   - `policy-infra-nodes-machineset-create`: Compliant (our working replacement)
+
+3. **Single-AZ deployment:**
+   - All 3 infra nodes created in one availability zone (workaround for zone label parsing bug)
+   - Acceptable for dev/lab environments
+
+See [DEPLOYMENT_NOTES.md](DEPLOYMENT_NOTES.md) for detailed upgrade procedure.

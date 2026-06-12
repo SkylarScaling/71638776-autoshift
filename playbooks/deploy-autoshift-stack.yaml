@@ -30,41 +30,12 @@
       ansible.builtin.set_fact:
         hub_kubeconfig: "{{ install_dir }}/{{ ocp_cluster.name }}/auth/kubeconfig"
 
-    - name: Create Infrastructure Node Pool
-      block:
-        - ansible.builtin.include_role:
-            name: ocp/aws_create_machineset
-          vars:
-            target_kubeconfig: "{{ hub_kubeconfig }}"
-            pool_name: "infra"
-            pool_replicas: "{{ install_config.infra.replicas }}"
-            pool_instance_type: "{{ install_config.infra.instance_type }}"
-            pool_labels:
-              node-role.kubernetes.io/infra: ""
-            pool_taints:
-              - effect: NoSchedule
-                key: node-role.kubernetes.io/infra
-      when: install_config.infra is defined
-
-    - name: Create ODF Storage Node Pool
-      block:
-        - ansible.builtin.include_role:
-            name: ocp/aws_create_machineset
-          vars:
-            target_kubeconfig: "{{ hub_kubeconfig }}"
-            pool_name: "storage"
-            pool_replicas: "{{ install_config.storage.replicas }}"
-            pool_instance_type: "{{ install_config.storage.instance_type }}"
-            pool_labels:
-              cluster.ocs.openshift.io/openshift-storage: ""
-              # Workers label required so standard OVN/Networking pods schedule here
-              node-role.kubernetes.io/worker: ""
-              node-role.kubernetes.io/storage: ""
-            pool_taints:
-              - effect: NoSchedule
-                key: node.ocs.openshift.io/storage
-                value: "true"
-      when: install_config.storage is defined
+    # NOTE: Infrastructure nodes are now provisioned automatically by AutoShift's
+    # infra-nodes policy based on cluster labels. The policy creates MachineSets,
+    # migrates platform workloads, and configures tolerations.
+    #
+    # Storage nodes can still be created manually if needed for ODF, but are not
+    # required for a minimal hub cluster.
 
 # ==============================================================================
 # Phase 2: Install and Configure AutoShift (via OCI Registry)
@@ -190,6 +161,17 @@
                     hub:
                       labels:
                         # ------------------------------------------------------
+                        # Infrastructure Nodes Configuration
+                        # ------------------------------------------------------
+                        infra-nodes: {{ install_config.infra.replicas }}
+                        infra-nodes-provider: 'aws'
+                        infra-nodes-instance-type: "{{ install_config.infra.instance_type }}"
+                        infra-nodes-volume-size: '120'
+                        # Note: Zone labels omitted due to AutoShift template bug
+                        # AutoShift will create 1 MachineSet per control plane AZ
+                        infra-machineconfigpool: 'true'
+                        infra-node-config: 'true'
+                        # ------------------------------------------------------
                         # Advanced Cluster Security (ACS)
                         # ------------------------------------------------------
                         acs: 'true'
@@ -215,6 +197,21 @@
               syncOptions:
                 - CreateNamespace=true
 
+    - name: Wait for policies-autoshift namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: policies-autoshift
+      register: policy_ns
+      until: policy_ns.resources | length > 0
+      retries: 60
+      delay: 5
+
+    - name: Apply Infra Nodes MachineSet Fix IMMEDIATELY (before AutoShift creates machines)
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../policies/policy-infra-nodes-machineset-create.yaml"
+
     # --------------------------------------------------------------------------
     # Step 4: ClusterSet Labeling
     # --------------------------------------------------------------------------
@@ -232,20 +229,20 @@
     # --------------------------------------------------------------------------
     # Step 5: Apply Supplemental Policies
     # --------------------------------------------------------------------------
-    - name: Wait for policies-autoshift namespace to be created by ArgoCD
-      kubernetes.core.k8s_info:
-        api_version: v1
-        kind: Namespace
-        name: policies-autoshift
-      register: policy_namespace
-      until: policy_namespace.resources | length > 0
-      retries: 60
-      delay: 10
-
     - name: Apply ACS Infrastructure Nodes Policy
       kubernetes.core.k8s:
         state: present
         src: "{{ playbook_dir }}/../policies/policy-acs-infra-nodes.yaml"
+
+    - name: Apply ACS SecuredCluster Policy
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../policies/policy-acs-secured-cluster.yaml"
+
+    - name: Apply ACM Infrastructure Nodes Policy
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ playbook_dir }}/../policies/policy-acm-infra-nodes.yaml"
 
 # ==============================================================================
 # SUMMARY: Final Environment Handoff

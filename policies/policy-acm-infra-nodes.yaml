@@ -1,0 +1,103 @@
+---
+# ==============================================================================
+# Supplemental ACM Policy: Configure ACM to use Infrastructure Nodes
+# ==============================================================================
+# This policy patches the ACM MultiClusterHub CR to pin deployments to
+# infrastructure nodes using nodeSelector and tolerations.
+#
+# This policy:
+# - Depends on autoshift's policy-acm-mch-install being compliant
+# - Uses sync-wave "2" to apply AFTER autoshift's wave "1"
+# - Uses complianceType: musthave for additive merging (won't conflict)
+# - Can be applied alongside autoshift without ArgoCD conflicts
+# ==============================================================================
+apiVersion: policy.open-cluster-management.io/v1
+kind: Policy
+metadata:
+  name: policy-acm-infra-nodes
+  namespace: policies-autoshift
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+    policy.open-cluster-management.io/standards: NIST SP 800-53
+    policy.open-cluster-management.io/categories: CM Configuration Management
+    policy.open-cluster-management.io/controls: CM-2 Baseline Configuration
+spec:
+  disabled: false
+  remediationAction: enforce
+  dependencies:
+    - name: policy-acm-mch-install
+      namespace: policies-autoshift
+      apiVersion: policy.open-cluster-management.io/v1
+      compliance: Compliant
+      kind: Policy
+  policy-templates:
+    - objectDefinition:
+        apiVersion: policy.open-cluster-management.io/v1
+        kind: ConfigurationPolicy
+        metadata:
+          name: acm-mch-infra-nodes
+        spec:
+          remediationAction: enforce
+          severity: medium
+          evaluationInterval:
+            compliant: 10m
+            noncompliant: 30s
+          object-templates:
+            - complianceType: musthave
+              objectDefinition:
+                apiVersion: operator.open-cluster-management.io/v1
+                kind: MultiClusterHub
+                metadata:
+                  name: multiclusterhub
+                  namespace: open-cluster-management
+                spec:
+                  nodeSelector:
+                    node-role.kubernetes.io/infra: ""
+                  tolerations:
+                    - effect: NoSchedule
+                      key: node-role.kubernetes.io/infra
+                      operator: Exists
+                    - effect: NoExecute
+                      key: node-role.kubernetes.io/infra
+                      operator: Exists
+---
+apiVersion: cluster.open-cluster-management.io/v1beta1
+kind: Placement
+metadata:
+  name: policy-acm-infra-nodes-placement
+  namespace: policies-autoshift
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+spec:
+  clusterSets:
+    - hub
+  predicates:
+    - requiredClusterSelector:
+        labelSelector:
+          matchExpressions:
+            - key: 'self-managed'
+              operator: In
+              values:
+                - 'true'
+  tolerations:
+    - key: cluster.open-cluster-management.io/unreachable
+      operator: Exists
+    - key: cluster.open-cluster-management.io/unavailable
+      operator: Exists
+---
+apiVersion: policy.open-cluster-management.io/v1
+kind: PlacementBinding
+metadata:
+  name: policy-acm-infra-nodes-placement
+  namespace: policies-autoshift
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+placementRef:
+  name: policy-acm-infra-nodes-placement
+  apiGroup: cluster.open-cluster-management.io
+  kind: Placement
+subjects:
+  - name: policy-acm-infra-nodes
+    apiGroup: policy.open-cluster-management.io
+    kind: Policy

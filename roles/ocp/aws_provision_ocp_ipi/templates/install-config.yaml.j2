@@ -24,8 +24,8 @@ compute:
 {% endif %}
   replicas: {{ install_config.workers.replicas }}
 {% else %}
-  platform:
-    replicas: 3
+  replicas: 0
+  platform: {}
 {% endif %}
 controlPlane:
   architecture: amd64
